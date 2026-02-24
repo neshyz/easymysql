@@ -4,10 +4,10 @@
 
 #define _easymysql_included
 
-
-// instalar "logger.inc"
-#tryinclude "lib/easylogs/logger.inc"
-#tryinclude <logger>
+#if !defined _logger_included
+    #tryinclude <logger>
+    #tryinclude "lib/easylogs/logger.inc"
+#endif
 
 #if !defined _logger_included
     #error "install easylogs.inc ->   neshyz/easylogs.git"
