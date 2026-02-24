@@ -170,7 +170,7 @@ stock mysql_addtable(MySQL:handle, const tableName[], const entry[] = "ID INTEGE
 
 stock mysql_columnexists(MySQL:handle, const table[], const columnName[])
 {
-    new dbName[EZMYSQL_MAX_DBNAME_SIZE];
+    new dbname[EZMYSQL_MAX_DBNAME_SIZE];
     strunpack(dbname, s_ConnectionData[handle][E_MYSQL_CONNECTION_DBNAME]);
 
     mysql_format(handle, s_QueryBuffer, sizeof(s_QueryBuffer),
