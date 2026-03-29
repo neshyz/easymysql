@@ -61,6 +61,55 @@ static s_ErrorBuffer[EZMYSQL_MAX_ERROR_BUFFER_SIZE];
 #endif
 
 
+#if !defined EZMYSQL_MAX_TABLE_COLUMNS
+    #define EZMYSQL_MAX_TABLE_COLUMNS (256)
+#endif
+
+
+#if !defined EZMYSQL_MAX_TABLE_NAME_SIZE
+    #define EZMYSQL_MAX_TABLE_NAME_SIZE (32)
+#endif
+
+
+#if !defined EZMYSQL_MAX_COLUMN_NAME_SIZE
+    #define EZMYSQL_MAX_COLUMN_NAME_SIZE (32)
+#endif
+
+
+#if !defined EZMYSQL_MAX_TABLES
+    #define EZMYSQL_MAX_TABLES (128)
+#endif
+
+
+static enum E_MYSQL_TABLE_DATA {
+    E_MYSQL_TABLE_NAME[EZMYSQL_MAX_TABLE_NAME_SIZE char],
+    DatabaseColumn:E_MYSQL_COLUMNIDX[EZMYSQL_MAX_TABLE_COLUMNS],
+    bool:E_MYSQL_TABLE_VALID
+}
+static s_TableData[MySQL:EZMYSQL_MAX_CONNECTIONS][DatabaseTable:EZMYSQL_MAX_TABLES][E_MYSQL_TABLE_DATA];
+
+
+
+
+enum e_EZMYSQL_DATATYPE {
+    EZMYSQL_DATATYPE_INTEGER,
+    EZMYSQL_DATATYPE_FLOAT,
+    EZMYSQL_DATATYPE_STRING,
+    EZMYSQL_DATATYPE_BOOLEAN,
+    EZMYSQL_DATATYPE_OTHER
+}
+
+static enum E_MYSQL_COLUMN_DATA {
+    E_MYSQL_COLUMN_NAME[EZMYSQL_MAX_COLUMN_NAME_SIZE char],
+    e_EZMYSQL_DATATYPE:E_MYSQL_COLUMN_DATATYPE,
+    DatabaseTable:E_MYSQL_COLUMN_TABLEIDX,
+    bool:E_MYSQL_COLUMN_VALID
+}
+static s_ColumnData[MySQL:EZMYSQL_MAX_CONNECTIONS][DatabaseColumn:EZMYSQL_MAX_TABLE_COLUMNS][E_MYSQL_COLUMN_DATA];
+
+
+
+
 static enum E_MYSQL_CONNECTION_DATA {
     E_MYSQL_CONNECTION_DBNAME[EZMYSQL_MAX_DBNAME_SIZE char],
     E_MYSQL_CONNECTION_PASSWORD[EZMYSQL_MAX_PASS_SIZE char],
@@ -136,6 +185,30 @@ stock MySQL:ezmysql_connect(const host[], const user[], const password[], const 
 
 
 
+static DatabaseTable:GetUnusedTableIdx(MySQL:handle)
+{
+    for(new DatabaseTable:tableidx; tableidx < DatabaseTable:EZMYSQL_MAX_TABLES; tableidx++) {
+        if(!s_TableData[handle][tableidx][E_MYSQL_TABLE_VALID]) {
+            return tableidx;
+        }
+    }
+
+    return DatabaseTable:-1;
+}
+
+
+
+static DatabaseColumn:GetUnusedColumnIdx(MySQL:handle)
+{
+    for(new DatabaseColumn:columnidx; columnidx < DatabaseColumn:EZMYSQL_MAX_TABLE_COLUMNS; columnidx++) {
+        if(!s_ColumnData[handle][columnidx][E_MYSQL_COLUMN_VALID]) {
+            return columnidx;
+        }
+    }
+
+    return DatabaseColumn:-1;
+}
+
 stock mysql_addtable(MySQL:handle, const tableName[], const entry[] = "ID INTEGER AUTO_INCREMENT, PRIMARY KEY(ID)")
 {
     mysql_format(handle, s_QueryBuffer, sizeof(s_QueryBuffer),
@@ -143,9 +216,17 @@ stock mysql_addtable(MySQL:handle, const tableName[], const entry[] = "ID INTEGE
             %s);", tableName, entry
 	);
         
-    mysql_query(handle, s_QueryBuffer, true);
+    mysql_tquery(handle, s_QueryBuffer, "qcb_ezmysql_addtable", "iss", _:handle, tableName, entry);
+}
 
-    if(mysql_errno(handle) != 0) {
+forward qcb_ezmysql_addtable(MySQL:handle, const tableName[], const entry[]);
+public qcb_ezmysql_addtable(MySQL:handle, const tableName[], const entry[])
+{
+    new
+        DatabaseTable:tableidx = GetUnusedTableIdx(handle)
+    ;
+
+    if(mysql_errno(handle) != 0 || tableidx == DatabaseTable:-1) {
 
         mysql_error(s_ErrorBuffer);
 
@@ -153,10 +234,17 @@ stock mysql_addtable(MySQL:handle, const tableName[], const entry[] = "ID INTEGE
             "table creation fail",
             logger_string("tableName", tableName),
             logger_string("entry", entry),
-            logger_string("error", s_ErrorBuffer)
+            logger_string("error", s_ErrorBuffer),
+            logger_int("tableidx", _:tableidx)
 
         );
 
+    }
+    else {
+
+        strpack(s_TableData[handle][tableidx][E_MYSQL_TABLE_NAME], tableName);
+        s_TableData[handle][tableidx][E_MYSQL_TABLE_VALID] = true;
+    
     }
 }
 
@@ -167,9 +255,21 @@ stock mysql_addtable(MySQL:handle, const tableName[], const entry[] = "ID INTEGE
 
 
 
-
 stock mysql_columnexists(MySQL:handle, const table[], const columnName[])
 {
+    new unpackedColumnIdx[EZMYSQL_MAX_COLUMN_NAME_SIZE];
+    for(new DatabaseColumn:columnidx; columnidx < DatabaseColumn:EZMYSQL_MAX_TABLE_COLUMNS; columnidx++) {
+        if(!s_ColumnData[handle][columnidx][E_MYSQL_COLUMN_VALID]) {
+            continue;
+        }
+        strunpack(unpackedColumnIdx, s_ColumnData[handle][columnidx][E_MYSQL_COLUMN_NAME]);
+
+        if(strcmp(unpackedColumnIdx, columnName, true) == 0) {
+            return 1;
+        }
+    }
+
+
     new dbname[EZMYSQL_MAX_DBNAME_SIZE];
     strunpack(dbname, s_ConnectionData[handle][E_MYSQL_CONNECTION_DBNAME]);
 
@@ -192,9 +292,13 @@ stock mysql_columnexists(MySQL:handle, const table[], const columnName[])
     return int;
 }
 
-stock mysql_addcolumn(MySQL:handle, const table[], const columnName[], const typeData[])
+stock mysql_addcolumn(MySQL:handle, const DatabaseTable:tableidx, const columnName[], e_EZMYSQL_DATATYPE:datatype)
 {
-    if(mysql_columnexists(handle, table, columnName)) {
+    new tableName[EZMYSQL_MAX_TABLE_NAME_SIZE];
+    strunpack(tableName, s_TableData[handle][tableidx][E_MYSQL_TABLE_NAME]);
+
+
+    if(mysql_columnexists(handle, tableName, columnName)) {
 
         return;
         
@@ -203,11 +307,19 @@ stock mysql_addcolumn(MySQL:handle, const table[], const columnName[], const typ
     format(s_QueryBuffer, sizeof(s_QueryBuffer),
 
         "ALTER TABLE `%s` ADD COLUMN `%s` %s;\n",
-        table, columnName, typeData
+        tableName, columnName, typeData
 
     );
 
-    mysql_query(handle, s_QueryBuffer, true);
+    mysql_tquery(handle, s_QueryBuffer, "qcb_ezmysql_addcolumn", "iisi", _:handle, _:tableidx, columnName, _:datatype);
+}
+
+forward qcb_ezmysql_addcolumn(MySQL:handle, const DatabaseTable:tableidx, const columnName[], e_EZMYSQL_DATATYPE:datatype);
+public qcb_ezmysql_addcolumn(MySQL:handle, const DatabaseTable:tableidx, const columnName[], e_EZMYSQL_DATATYPE:datatype)
+{
+    new
+        DatabaseColumn:columnidx = GetUnusedColumnIdx(handle)
+    ;
 
     if(mysql_errno(handle) != 0) {
 
@@ -219,8 +331,72 @@ stock mysql_addcolumn(MySQL:handle, const table[], const columnName[], const typ
             logger_string("table", table),
             logger_string("columnName", columnName),
             logger_string("typeData", typeData),
-            logger_string("error", s_ErrorBuffer)
+            logger_string("error", s_ErrorBuffer),
+            logger_int("columnidx", _:columnidx)
         );
 
+    }
+    else {
+
+        strpack(s_ColumnData[handle][columnidx][E_MYSQL_COLUMN_NAME], columnName);
+        s_ColumnData[handle][columnidx][E_MYSQL_COLUMN_VALID] = true;
+
+    }
+}
+
+
+
+
+stock mysql_removecolumn(MySQL:handle, DatabaseTable:tableidx, DatabaseColumn:columnidx)
+{
+    if(!mysql_columnexists(handle, tableidx, columnidx)) {
+
+        return;
+        
+    }
+
+
+
+    new
+        tableName[EZMYSQL_MAX_TABLE_NAME_SIZE],
+        columnName[EZMYSQL_MAX_COLUMN_SIZE]
+    ;
+    strunpack(tableName, s_TableData[handle][E_MYSQL_TABLE_NAME]);
+    strunpack(columnName, s_ColumnData[handle][E_MYSQL_COLUMN_NAME]);
+
+    format(s_QueryBuffer, sizeof(s_QueryBuffer),
+
+        "ALTER TABLE `%s` DROP COLUMN `%s`;\n",
+        tableName, columnName
+
+    );
+
+    mysql_tquery(handle, s_QueryBuffer, "qcb_ezmysql_removecolumn", "iiiss", _:handle, _:tableidx, _:columnidx, tableName, columnName);
+}
+
+
+
+forward qcb_ezmysql_removecolumn(MySQL:handle, DatabaseTable:tableidx, DatabaseColumn:columnidx, const tableName[], const columnName[]);
+public qcb_ezmysql_removecolumn(MySQL:handle, DatabaseTable:tableidx, DatabaseColumn:columnidx, const tableName[], const columnName[])
+{
+    if(mysql_errno(handle) != 0) {
+
+        mysql_error(s_ErrorBuffer);
+
+        sendlog(s_Logger, LOG_ERROR,
+            "mysql column removal failed",
+            logger_int("handle", _:handle),
+            logger_string("table", tableName),
+            logger_string("columnName", columnName),
+            logger_string("error", s_ErrorBuffer),
+            logger_int("tableidx", _:tableidx),
+            logger_int("columnidx", _:columnidx),
+
+        );
+
+    }
+    else {
+        s_ColumnData[handle][columnidx][E_MYSQL_COLUMN_VALID] = false;
+        strpack(s_ColumnData[handle][columnidx][E_MYSQL_COLUMN_NAME], "");
     }
 }
